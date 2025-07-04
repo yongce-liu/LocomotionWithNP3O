@@ -42,6 +42,10 @@ class Dog:
         self.policy = loaded_policy
         self.obs = np.zeros((self.policy.num_obs,))
         self.used_obs_idx = range(3, self.policy.num_prop)
+        self.base_ang_vel = None
+        self.base_quat = None
+        self.dof_pos = None
+        self.dof_vel = None
         self._init_default_vars()
         self._init_handlers()
 
@@ -100,25 +104,30 @@ class Dog:
         self.low_state_suber = channel.ChannelSubscriber(
             "rt/lowstate", unitree_msg_dds.LowState_
         )
+        self.low_state_suber.Init(self.LowStateHandler, 10)
         self.high_state_suber = channel.ChannelSubscriber(
             "rt/sportmodestate", unitree_msg_dds.SportModeState_
         )
         self.low_cmd_puber = channel.ChannelPublisher(
             "rt/lowcmd", unitree_msg_dds.LowCmd_
         )
+    
+    def LowStateHandler(self, msg: unitree_msg_dds.LowState_):
+        imu_state = msg.imu_state
+        self.base_ang_vel = imu_state.gyroscope
+        self.base_quat = imu_state.quaternion
+        motor_states = msg.motor_state
+        self.dof_pos = [_s.q for _s in motor_states]
+        self.dof_vel = [_s.dq for _s in motor_states]
+        print("LowStateHandler called")
 
     def compute_obs(self, cmd: torch.Tensor):
-        base_ang_vel = 0.0
-        base_quat = 0.0
-        projected_gravity = quat_apply_inverse(base_quat, self.gravity_vec)
-        dof_pos = 0.0
-        dof_vel = 0.0
         self.obs[self.used_obs_idx] = torch.cat(
-            base_ang_vel * self.obs_scales.ang_vel,
-            projected_gravity,
+            self.base_ang_vel * self.obs_scales.ang_vel,
+            quat_apply_inverse(self.base_quat, self.gravity_vec),
             cmd[:3] * self.commands_scale,
-            (dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
-            dof_vel * self.obs_scales.dof_vel,
+            (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
+            self.dof_vel * self.obs_scales.dof_vel,
         )
 
     def get_act(self, cmd: torch.Tensor):
@@ -159,7 +168,7 @@ def load_policy(policy_path, device="cpu"):
         num_actions=n_actions,
         **policy_cfg_dict,
     )
-    model_dict = torch.load(policy_path, map_location=torch.device(device))
+    model_dict = torch.load(policy_path, map_location=torch.device(device), weights_only=False)
     policy.load_state_dict(model_dict["model_state_dict"])
     policy.half()
     policy.eval()
@@ -179,3 +188,5 @@ if __name__ == "__main__":
     policy = load_policy(params.path, device=params.device)
     channel.ChannelFactoryInitialize(1, params.address)
     test_dog = Dog(loaded_policy=policy)
+    while True:
+        pass

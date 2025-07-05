@@ -1,3 +1,9 @@
+import os
+
+ROOT_DIR = os.path.join(os.path.dirname(__file__), "checkpoint")
+ENVS_DIR = os.path.join(ROOT_DIR, "Env")
+
+
 from configs.go2_constraint_him import (
     Go2ConstraintHimRoughCfg,
     Go2ConstraintHimRoughCfgPPO,
@@ -14,8 +20,6 @@ from utils.helpers import class_to_dict
 from utils.task_registry import task_registry
 import numpy as np
 import torch
-from global_config import ROOT_DIR
-
 from PIL import Image as im
 
 

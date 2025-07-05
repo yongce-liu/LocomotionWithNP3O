@@ -34,15 +34,15 @@ class UnitreeGo2:
 
     def __init__(self, loaded_policy: ActorCriticBarlowTwins):
         self.policy = loaded_policy
-        self.decimation = 10
-        self.dt = 0.002
+        self.decimation = 4
+        self.dt = 0.001
         self.obs = torch.zeros((self.policy.num_hist+1, self.policy.num_prop))
         self.obs_cur = torch.zeros((1, self.policy.num_prop))
         self.act_buf = torch.zeros((self.policy.num_actions,))
         self.base_ang_vel = None
         self.base_quat = None  # Quaternion [w, x, y, z]
-        self.dof_pos = None
-        self.dof_vel = None
+        self.dof_pos = torch.zeros((12,))
+        self.dof_vel = torch.zeros((12,))
         self.if_read_state = False  # Flag to check if state is read
         self._init_default_vars()
         self._init_handlers()
@@ -55,6 +55,7 @@ class UnitreeGo2:
         """
         self.gravity_vec = torch.tensor([0.0, 0.0, -1], dtype=torch.float32)
         self.obs_scales = Normalization.obs_scales
+        self.act_scales =  Normalization.act_scales
         self.clip_actions = Normalization.clip_actions
         self.clip_obs = Normalization.clip_observations
         self.commands_scale = torch.tensor(
@@ -81,9 +82,14 @@ class UnitreeGo2:
                 -1.5,  # RL_calf_joint
             ]
         )  # rad
-    #     self.default_dof_pos = torch.tensor([
-    #             0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
+        # self.default_dof_pos = torch.tensor([-0.133, 1.22, -2.72, 
+        #                                      0.132, 1.23, -2.72, 
+        #                                      -0.494, 1.48, -2.72,
+        #                                      0.492, 1.36, -2.72])
+    #     self.default_dof_pos = torch.tensor([    0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
     # 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375])
+    #     self.default_dof_pos = torch.tensor([0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
+    # 0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763])
         self.start_joint_angles = torch.tensor(
             [
                 0.0,  # FR_hip_joint
@@ -138,8 +144,9 @@ class UnitreeGo2:
         self.base_ang_vel: list = imu_state.gyroscope
         self.base_quat: list = imu_state.quaternion
         motor_states = msg.motor_state
-        self.dof_pos: list = [motor_states[i].q for i in range(12)]
-        self.dof_vel: list = [motor_states[i].dq for i in range(12)]
+        for i in range(12):
+            self.dof_pos[i] = motor_states[i].q
+            self.dof_vel[i] = motor_states[i].dq
         self.if_read_state = True
         # print("LowStateHandler called")
         # print("Base Angular Velocity: {}".format(self.base_ang_vel))
@@ -164,9 +171,9 @@ class UnitreeGo2:
                 torch.tensor(self.base_ang_vel) * self.obs_scales.ang_vel,
                 quat_apply_inverse(torch.tensor(self.base_quat), self.gravity_vec),
                 des_act[:3] * self.commands_scale,
-                (torch.tensor(self.dof_pos) - self.default_dof_pos)
+                (self.dof_pos - self.default_dof_pos)
                 * self.obs_scales.dof_pos,
-                torch.tensor(self.dof_vel) * self.obs_scales.dof_vel,
+                self.dof_vel * self.obs_scales.dof_vel,
                 self.act_buf,
             )
         )
@@ -186,7 +193,6 @@ class UnitreeGo2:
         """
         self.update_obs(des_act)
         action = self.policy.act_teacher(self.obs.view(-1).unsqueeze(0)).squeeze(0)
-        self.act_buf = action
         action = torch.clip(
             action,
             -self.clip_actions,
@@ -199,61 +205,55 @@ class UnitreeGo2:
         for _ in range(self.decimation):
             self.low_cmd_puber.Write(self.cmd)
             time.sleep(self.dt)
+        self.act_buf = action
         # return motor_cmd
 
     def _act2cmd(self, act):
         act = act.cpu().squeeze(0)
+        tau = self._compute_torques(act)
         for i in range(12):
-            self.cmd.motor_cmd[i].q = 0.0
+            self.cmd.motor_cmd[i].q = tau[i]
             self.cmd.motor_cmd[i].kp = 50.0
-            self.cmd.motor_cmd[i].dq = act[i]
-            self.cmd.motor_cmd[i].kd = 5.0
-            self.cmd.motor_cmd[i].tau = 0
+            self.cmd.motor_cmd[i].dq = 0.0
+            self.cmd.motor_cmd[i].kd = 2.0
+            self.cmd.motor_cmd[i].tau = 0.0
 
-    # def _compute_torques(self, actions):
-    #     """ Compute torques from actions.
-    #         Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
-    #         [NOTE]: torques must have the same dimension as the number of DOFs, even if some DOFs are not actuated.
+    def _compute_torques(self, actions):
+        """ Compute torques from actions.
+            Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
+            [NOTE]: torques must have the same dimension as the number of DOFs, even if some DOFs are not actuated.
 
-    #     Args:
-    #         actions (torch.Tensor): Actions
+        Args:
+            actions (torch.Tensor): Actions
 
-    #     Returns:
-    #         [torch.Tensor]: Torques sent to the simulation
-    #     """
-    #     if self.cfg.control.use_filter:
-    #         actions = self._low_pass_action_filter(actions)
+        Returns:
+            [torch.Tensor]: Torques sent to the simulation
+        """
+        # if self.use_filter:
+        if True:
+            actons = self.act_buf * 0.2 + actions * 0.8
 
-    #     #pd controller
-    #     actions_scaled = actions[:, :12] * self.cfg.control.action_scale
-    #     actions_scaled[:, [0, 3, 6, 9]] *= self.cfg.control.hip_scale_reduction
-
-    #     # if self.cfg.domain_rand.randomize_lag_timesteps:
-    #     #     self.lag_buffer = self.lag_buffer[1:] + [actions_scaled.clone()]
-    #     #     joint_pos_target = self.lag_buffer[0] + self.default_dof_pos
-    #     # else:
-    #     #     joint_pos_target = actions_scaled + self.default_dof_pos
-
-    #     if self.cfg.domain_rand.randomize_lag_timesteps:
-    #         self.lag_buffer = torch.cat([self.lag_buffer[:,1:,:].clone(),actions_scaled.unsqueeze(1).clone()],dim=1)
-    #         joint_pos_target = self.lag_buffer[self.num_envs_indexes,self.randomized_lag,:] + self.default_dof_pos
-    #     else:
-    #         joint_pos_target = actions_scaled + self.default_dof_pos
-
-    #     # joint_pos_target = torch.clamp(joint_pos_target,self.dof_pos-1,self.dof_pos+1)
-
-    #     control_type = self.cfg.control.control_type
-    #     if control_type=="P":
-    #         if not self.cfg.domain_rand.randomize_kpkd:  # TODO add strength to gain directly
-    #             torques = self.p_gains*(joint_pos_target- self.dof_pos) - self.d_gains*self.dof_vel
-    #         else:
-    #             torques = self.kp_factor * self.p_gains*(joint_pos_target - self.dof_pos) - self.kd_factor * self.d_gains*self.dof_vel
-    #     elif control_type=="V":
-    #         torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
-    #     elif control_type=="T":
-    #         torques = actions_scaled
-    #     else:
-    #         raise NameError(f"Unknown controller type: {control_type}")
+        #pd controller
+        actions_scaled = actions[:12] * self.act_scales.action_scale
+        actions_scaled[[0, 3, 6, 9]] *= self.act_scales.hip_scale_reduction
         
-    #     torques = torques * self.motor_strength
-    #     return torch.clip(torques, -self.torque_limits, self.torque_limits)
+        joint_pos_target = actions_scaled + self.default_dof_pos
+
+        joint_pos_target = torch.clamp(joint_pos_target,self.dof_pos-1,self.dof_pos+1)
+        return joint_pos_target
+
+        # control_type = self.cfg.control.control_type
+        # if control_type=="P":
+        #     if not self.cfg.domain_rand.randomize_kpkd:  # TODO add strength to gain directly
+        #         torques = self.p_gains*(joint_pos_target- self.dof_pos) - self.d_gains*self.dof_vel
+        #     else:
+        #         torques = self.kp_factor * self.p_gains*(joint_pos_target - self.dof_pos) - self.kd_factor * self.d_gains*self.dof_vel
+        # elif control_type=="V":
+        #     torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
+        # elif control_type=="T":
+        #     torques = actions_scaled
+        # else:
+        #     raise NameError(f"Unknown controller type: {control_type}")
+        
+        # torques = torques * self.motor_strength
+        # return torch.clip(torques, -self.torque_limits, self.torque_limits)

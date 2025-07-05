@@ -35,7 +35,7 @@ def load_policy(policy_path, device="cpu"):
         **policy_cfg_dict,
     )
     model_dict = torch.load(
-        policy_path, map_location=torch.device(device), weights_only=False
+        policy_path, map_location=torch.device(device), weights_only=True
     )
     policy.load_state_dict(model_dict["model_state_dict"])
     # policy.half()

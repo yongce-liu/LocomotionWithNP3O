@@ -44,6 +44,10 @@ class Normalization:
         dof_pos = 1.0
         dof_vel = 0.05
         height_measurements = 5.0
+    
+    class act_scales:
+        action_scale = 0.25
+        hip_scale_reduction = 0.5 
 
     clip_observations = 100.0
     # clip_actions = 1.2

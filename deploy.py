@@ -57,5 +57,5 @@ if __name__ == "__main__":
     channel.ChannelFactoryInitialize(1, params.address)
     test_dog = UnitreeGo2(loaded_policy=policy)
     while True:
-        test_dog.step(torch.tensor([0.0, 0.0, 0.0]))
-        time.sleep(0.01)
+        test_dog.step(torch.tensor([1.0, 0.0, 0.0]))
+        # time.sleep(0.02)

@@ -1,9 +1,3 @@
-import os
-
-ROOT_DIR = os.path.join(os.path.dirname(__file__), "checkpoint")
-ENVS_DIR = os.path.join(ROOT_DIR, "Env")
-
-
 from configs.go2_constraint_him import (
     Go2ConstraintHimRoughCfg,
     Go2ConstraintHimRoughCfgPPO,
@@ -21,6 +15,7 @@ from utils.task_registry import task_registry
 import numpy as np
 import torch
 from PIL import Image as im
+from global_config import ROOT_DIR
 
 
 def delete_files_in_directory(directory_path):
@@ -74,7 +69,7 @@ def play(args):
     )
     print(policy)
     # model_dict = torch.load(os.path.join(ROOT_DIR, 'model_4000_phase2_hip.pt'))
-    model_dict = torch.load(os.path.join(ROOT_DIR, "model_10000.pt"))
+    model_dict = torch.load(os.path.join(ROOT_DIR, "checkpoint/model_10000.pt"))
     policy.load_state_dict(model_dict["model_state_dict"])
     policy.half()
     policy.eval()

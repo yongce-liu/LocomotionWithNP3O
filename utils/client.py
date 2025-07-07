@@ -7,6 +7,7 @@ from unitree_sdk2py.core import channel  # Pub, Sub, FactoryInitializer
 import unitree_sdk2py.idl.unitree_go.msg.dds_ as unitree_msg_dds
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.utils.crc import CRC
+from unitree_sdk2py.go2.sport.sport_client import SportClient
 
 # policy utils
 from modules import ActorCriticBarlowTwins
@@ -14,7 +15,7 @@ from .tools import Normalization
 from .math import quat_apply_inverse
 
 
-class UnitreeGo2:
+class Dog:
     """
     Default Joint angles for the dog.
     unitree go2 sdk order:
@@ -257,3 +258,44 @@ class UnitreeGo2:
         
         # torques = torques * self.motor_strength
         # return torch.clip(torques, -self.torque_limits, self.torque_limits)
+
+class UnitreeGo2(Dog):
+    def __init__(self, loaded_policy: ActorCriticBarlowTwins):
+        super().__init__(loaded_policy)
+        self.sport_client = SportClient()
+        self.sport_client.SetTimeout(10.0)
+        self.sport_client.Init()
+
+    def Damp(self):
+        self.sport_client.Damp()
+
+    def StandUp(self):
+        self.sport_client.StandUp()
+
+    def StandDown(self):
+        self.sport_client.StandDown()
+
+    def Move(self, vx, vy, vyaw):
+        self.sport_client.Move(vx, vy, vyaw)
+
+    def StopMove(self):
+        self.sport_client.StopMove()
+
+    def BalanceStand(self):
+        self.sport_client.BalanceStand()
+
+    def RecoveryStand(self):
+        self.sport_client.RecoveryStand()
+
+    def FreeWalk(self, is_start):
+        self.sport_client.FreeWalk(is_start)
+
+    def FreeBound(self, is_start):
+        ret = self.sport_client.FreeBound(True)
+        print("ret: ",ret)
+        time.sleep(2)
+
+    def FreeAvoid(self, is_start):
+        ret = self.sport_client.FreeAvoid(True)
+        print("ret: ",ret)
+        time.sleep(2)

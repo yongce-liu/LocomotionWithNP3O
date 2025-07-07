@@ -53,9 +53,15 @@ if __name__ == "__main__":
     args.add_argument("--address", type=str, default="lo")
 
     params = args.parse_args()
+    torch.set_default_device(params.device)
+    print(f"Loading policy from {params.path} on device {params.device}")
     policy = load_policy(params.path, device=params.device)
-    channel.ChannelFactoryInitialize(1, params.address)
+    if params.address == "lo":
+        channel.ChannelFactoryInitialize(1, params.address)
+    else:
+        channel.ChannelFactoryInitialize(0, params.address)
     test_dog = UnitreeGo2(loaded_policy=policy)
+    test_dog.start()
     while True:
         test_dog.step(torch.tensor([1.0, 0.0, 0.0]))
         # time.sleep(0.02)

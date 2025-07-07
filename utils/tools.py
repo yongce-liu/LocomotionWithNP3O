@@ -60,6 +60,9 @@ class Normalization:
                                       0.837758, 1.5708, 0.837758,
                                       0.837758, 0.523599, 0.837758,
                                       0.837758, 0.523599, 0.837758]]) * 0.9
+    class ctrl_params:
+        Kp = 50.0
+        Kd = 2.0
     
     clip_observations = 100.0
     # clip_actions = 1.2

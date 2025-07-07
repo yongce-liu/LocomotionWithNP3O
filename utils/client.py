@@ -1,6 +1,7 @@
-import numpy as np
 import torch
 import time
+import queue
+import threading
 
 # Unitree Go2 SDK imports
 from unitree_sdk2py.core import channel  # Pub, Sub, FactoryInitializer
@@ -8,6 +9,9 @@ import unitree_sdk2py.idl.unitree_go.msg.dds_ as unitree_msg_dds
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.go2.sport.sport_client import SportClient
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+from unitree_sdk2py.utils.thread import RecurrentThread
+
 
 # policy utils
 from modules import ActorCriticBarlowTwins
@@ -36,7 +40,7 @@ class Dog:
     def __init__(self, loaded_policy: ActorCriticBarlowTwins):
         self.policy = loaded_policy
         self.decimation = 4
-        self.dt = 0.001
+        self.dt = 0.002
         self.obs = torch.zeros((self.policy.num_hist+1, self.policy.num_prop))
         self.obs_cur = torch.zeros((1, self.policy.num_prop))
         self.act_buf = torch.zeros((self.policy.num_actions,))
@@ -46,9 +50,13 @@ class Dog:
         self.dof_vel = torch.zeros((12,))
         self.if_read_state = False  # Flag to check if state is read
         self._init_default_vars()
+        self._init_low_cmd()
         self._init_handlers()
         while not self.if_read_state:
             time.sleep(0.01)
+
+    def start(self):
+        self.lowCmdWriteThreadPtr.Start()
 
     def _init_default_vars(self):
         """
@@ -59,6 +67,8 @@ class Dog:
         self.act_scales =  Normalization.act_scales
         self.clip_actions = Normalization.clip_actions
         self.clip_obs = Normalization.clip_observations
+        self.Kp = Normalization.ctrl_params.Kp
+        self.Kd = Normalization.ctrl_params.Kd
         self.commands_scale = torch.tensor(
             [
                 self.obs_scales.lin_vel,
@@ -91,23 +101,24 @@ class Dog:
     # 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375])
     #     self.default_dof_pos = torch.tensor([0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
     # 0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763])
-        self.start_joint_angles = torch.tensor(
-            [
-                0.0,  # FR_hip_joint
-                0.9,  # FR_thigh_joint
-                -1.8,  # FR_calf_joint
-                0.0,  # FL_hip_joint
-                0.9,  # FL_thigh_joint
-                -1.8,  # FL_calf_joint
-                0.0,  # RR_hip_joint
-                0.9,  # RR_thigh_joint
-                -1.8,  # RR_calf_joint
-                0.0,  # RL_hip_joint
-                0.9,  # RL_thigh_joint
-                -1.8,  # RL_calf_joint
-            ]
-        )
+        # self.start_joint_angles = torch.tensor(
+        #     [
+        #         0.0,  # FR_hip_joint
+        #         0.9,  # FR_thigh_joint
+        #         -1.8,  # FR_calf_joint
+        #         0.0,  # FL_hip_joint
+        #         0.9,  # FL_thigh_joint
+        #         -1.8,  # FL_calf_joint
+        #         0.0,  # RR_hip_joint
+        #         0.9,  # RR_thigh_joint
+        #         -1.8,  # RR_calf_joint
+        #         0.0,  # RL_hip_joint
+        #         0.9,  # RL_thigh_joint
+        #         -1.8,  # RL_calf_joint
+        #     ]
+        # )
 
+    def _init_low_cmd(self):
         cmd = unitree_go_msg_dds__LowCmd_()
         cmd.head[0] = 0xFE
         cmd.head[1] = 0xEF
@@ -115,12 +126,26 @@ class Dog:
         cmd.gpio = 0
         for i in range(20):
             cmd.motor_cmd[i].mode = 0x01  # (PMSM) mode
-            cmd.motor_cmd[i].q = 0.0
+            cmd.motor_cmd[i].q = 2.146e9
             cmd.motor_cmd[i].kp = 0.0
-            cmd.motor_cmd[i].dq = 0.0
+            cmd.motor_cmd[i].dq = 16000.0
             cmd.motor_cmd[i].kd = 0.0
             cmd.motor_cmd[i].tau = 0.0
         self.cmd = cmd
+        self.cmd_queue = queue.Queue(maxsize=10)
+        self.cmd_lock = threading.Lock()  
+        self.crc = CRC()
+        self.lowCmdWriteThreadPtr = RecurrentThread(
+            interval=self.dt, target=self._send_latest_cmd, name="writebasiccmd"
+        )
+
+    def _send_latest_cmd(self):
+        try:
+            cmd = self.cmd_queue.get_nowait()
+            cmd.crc = self.crc.Crc(cmd)
+            self.low_cmd_puber.Write(cmd)
+        except queue.Empty:
+            pass
 
     def _init_handlers(self):
         """
@@ -131,14 +156,13 @@ class Dog:
             "rt/lowstate", unitree_msg_dds.LowState_
         )
         self.low_state_suber.Init(self.LowStateHandler, 10)
-        self.high_state_suber = channel.ChannelSubscriber(
-            "rt/sportmodestate", unitree_msg_dds.SportModeState_
-        )
+        # self.high_state_suber = channel.ChannelSubscriber(
+        #     "rt/sportmodestate", unitree_msg_dds.SportModeState_
+        # )
         self.low_cmd_puber = channel.ChannelPublisher(
             "rt/lowcmd", unitree_msg_dds.LowCmd_
         )
         self.low_cmd_puber.Init()
-        self.crc = CRC()
 
     def LowStateHandler(self, msg: unitree_msg_dds.LowState_):
         imu_state = msg.imu_state
@@ -184,7 +208,7 @@ class Dog:
             self.obs,
             -self.clip_obs,
             self.clip_obs,
-        )
+        )   
 
     def step(self, des_act: torch.Tensor):
         """
@@ -199,13 +223,9 @@ class Dog:
             -self.clip_actions,
             self.clip_actions,
         )
-        print("Action: ", action)
-        # action = self._compute_torques(action)
+        # print("Action: ", action)
         self._act2cmd(action)
-        self.cmd.crc = self.crc.Crc(self.cmd)
-        for _ in range(self.decimation):
-            self.low_cmd_puber.Write(self.cmd)
-            time.sleep(self.dt)
+        self.cmd_queue.put(self.cmd)
         self.act_buf = action
         # return motor_cmd
 
@@ -214,9 +234,9 @@ class Dog:
         tau = self._compute_torques(act)
         for i in range(12):
             self.cmd.motor_cmd[i].q = tau[i]
-            self.cmd.motor_cmd[i].kp = 50.0
+            self.cmd.motor_cmd[i].kp = self.Kp
             self.cmd.motor_cmd[i].dq = 0.0
-            self.cmd.motor_cmd[i].kd = 2.0
+            self.cmd.motor_cmd[i].kd = self.Kd
             self.cmd.motor_cmd[i].tau = 0.0
 
     def _compute_torques(self, actions):
@@ -232,7 +252,7 @@ class Dog:
         """
         # if self.use_filter:
         if True:
-            actons = self.act_buf * 0.2 + actions * 0.8
+            actions = self.act_buf * 0.2 + actions * 0.8
 
         #pd controller
         actions_scaled = actions[:12] * self.act_scales.action_scale
@@ -262,10 +282,21 @@ class Dog:
 class UnitreeGo2(Dog):
     def __init__(self, loaded_policy: ActorCriticBarlowTwins):
         super().__init__(loaded_policy)
+
         self.sport_client = SportClient()
         self.sport_client.SetTimeout(10.0)
         self.sport_client.Init()
+        self.msc = MotionSwitcherClient()
+        self.msc.SetTimeout(5.0)
+        self.msc.Init()
 
+        status, result = self.msc.CheckMode()
+        while result['name']:
+            self.sc.StandDown()
+            self.msc.ReleaseMode()
+            status, result = self.msc.CheckMode()
+            time.sleep(1)
+        
     def Damp(self):
         self.sport_client.Damp()
 
@@ -291,11 +322,11 @@ class UnitreeGo2(Dog):
         self.sport_client.FreeWalk(is_start)
 
     def FreeBound(self, is_start):
-        ret = self.sport_client.FreeBound(True)
+        ret = self.sport_client.FreeBound(is_start)
         print("ret: ",ret)
         time.sleep(2)
 
     def FreeAvoid(self, is_start):
-        ret = self.sport_client.FreeAvoid(True)
+        ret = self.sport_client.FreeAvoid(is_start)
         print("ret: ",ret)
         time.sleep(2)

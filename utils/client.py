@@ -36,10 +36,7 @@ class Dog:
     def __init__(self, loaded_policy: ActorCriticBarlowTwins):
         self.policy = loaded_policy
         self.decimation = 4
-        self.dt = 0.005
-        self.control_type = "P"
-        self.p_gains = 25.0
-        self.d_gains = 1.0
+        self.dt = 0.001
         self.obs = torch.zeros((self.policy.num_hist+1, self.policy.num_prop))
         self.obs_cur = torch.zeros((1, self.policy.num_prop))
         self.act_buf = torch.zeros((self.policy.num_actions,))
@@ -47,7 +44,6 @@ class Dog:
         self.base_quat = None  # Quaternion [w, x, y, z]
         self.dof_pos = torch.zeros((12,))
         self.dof_vel = torch.zeros((12,))
-        self.last_dof_vel = torch.zeros((12,))
         self.if_read_state = False  # Flag to check if state is read
         self._init_default_vars()
         self._init_handlers()
@@ -63,7 +59,6 @@ class Dog:
         self.act_scales =  Normalization.act_scales
         self.clip_actions = Normalization.clip_actions
         self.clip_obs = Normalization.clip_observations
-        self.dof_pos_clip = self.act_scales.dof_pos_clip
         self.commands_scale = torch.tensor(
             [
                 self.obs_scales.lin_vel,
@@ -88,30 +83,30 @@ class Dog:
                 -1.5,  # RL_calf_joint
             ]
         )  # rad
-        # self.default_dof_pos = torch.tensor([0.0473455, 1.22187, -2.44375, 
-        #                                     -0.0473455, 1.22187, -2.44375, 
-        #                                     0.0473455, 1.22187, -2.44375, 
-        #                                     -0.0473455, 1.22187, -2.44375])
-        # self.default_dof_pos = torch.tensor([0.00571868, 0.608813, -1.21763, 
-        #                                      -0.00571868, 0.608813, -1.21763,
-        #                                      0.00571868, 0.608813, -1.21763, 
-        #                                      -0.00571868, 0.608813, -1.21763])
-        # self.start_joint_angles = torch.tensor(
-        #     [
-        #         0.0,  # FR_hip_joint
-        #         0.9,  # FR_thigh_joint
-        #         -1.8,  # FR_calf_joint
-        #         0.0,  # FL_hip_joint
-        #         0.9,  # FL_thigh_joint
-        #         -1.8,  # FL_calf_joint
-        #         0.0,  # RR_hip_joint
-        #         0.9,  # RR_thigh_joint
-        #         -1.8,  # RR_calf_joint
-        #         0.0,  # RL_hip_joint
-        #         0.9,  # RL_thigh_joint
-        #         -1.8,  # RL_calf_joint
-        #     ]
-        # )
+        # self.default_dof_pos = torch.tensor([-0.133, 1.22, -2.72, 
+        #                                      0.132, 1.23, -2.72, 
+        #                                      -0.494, 1.48, -2.72,
+        #                                      0.492, 1.36, -2.72])
+    #     self.default_dof_pos = torch.tensor([    0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
+    # 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375])
+    #     self.default_dof_pos = torch.tensor([0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
+    # 0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763])
+        self.start_joint_angles = torch.tensor(
+            [
+                0.0,  # FR_hip_joint
+                0.9,  # FR_thigh_joint
+                -1.8,  # FR_calf_joint
+                0.0,  # FL_hip_joint
+                0.9,  # FL_thigh_joint
+                -1.8,  # FL_calf_joint
+                0.0,  # RR_hip_joint
+                0.9,  # RR_thigh_joint
+                -1.8,  # RR_calf_joint
+                0.0,  # RL_hip_joint
+                0.9,  # RL_thigh_joint
+                -1.8,  # RL_calf_joint
+            ]
+        )
 
         cmd = unitree_go_msg_dds__LowCmd_()
         cmd.head[0] = 0xFE
@@ -146,7 +141,6 @@ class Dog:
         self.crc = CRC()
 
     def LowStateHandler(self, msg: unitree_msg_dds.LowState_):
-        self.last_dof_vel = self.dof_vel
         imu_state = msg.imu_state
         self.base_ang_vel: list = imu_state.gyroscope
         self.base_quat: list = imu_state.quaternion
@@ -220,9 +214,9 @@ class Dog:
         tau = self._compute_torques(act)
         for i in range(12):
             self.cmd.motor_cmd[i].q = tau[i]
-            self.cmd.motor_cmd[i].kp = self.p_gains
+            self.cmd.motor_cmd[i].kp = 50.0
             self.cmd.motor_cmd[i].dq = 0.0
-            self.cmd.motor_cmd[i].kd = self.d_gains
+            self.cmd.motor_cmd[i].kd = 2.0
             self.cmd.motor_cmd[i].tau = 0.0
 
     def _compute_torques(self, actions):
@@ -247,19 +241,21 @@ class Dog:
         joint_pos_target = actions_scaled + self.default_dof_pos
 
         joint_pos_target = torch.clamp(joint_pos_target,self.dof_pos-1,self.dof_pos+1)
-        # joint_pos_target = torch.clamp(joint_pos_target, self.dof_pos_clip[0], self.dof_pos_clip[1])
         return joint_pos_target
 
-        # if self.control_type=="P":
-        #     torques = self.p_gains*(joint_pos_target- self.dof_pos) - self.d_gains*self.dof_vel
-        # elif self.control_type=="V":
-        #     torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.dt
-        # elif self.control_type=="T":
+        # control_type = self.cfg.control.control_type
+        # if control_type=="P":
+        #     if not self.cfg.domain_rand.randomize_kpkd:  # TODO add strength to gain directly
+        #         torques = self.p_gains*(joint_pos_target- self.dof_pos) - self.d_gains*self.dof_vel
+        #     else:
+        #         torques = self.kp_factor * self.p_gains*(joint_pos_target - self.dof_pos) - self.kd_factor * self.d_gains*self.dof_vel
+        # elif control_type=="V":
+        #     torques = self.p_gains*(actions_scaled - self.dof_vel) - self.d_gains*(self.dof_vel - self.last_dof_vel)/self.sim_params.dt
+        # elif control_type=="T":
         #     torques = actions_scaled
         # else:
-        #     raise NameError(f"Unknown controller type: {self.control_type}")
+        #     raise NameError(f"Unknown controller type: {control_type}")
         
-<<<<<<< HEAD
         # torques = torques * self.motor_strength
         # return torch.clip(torques, -self.torque_limits, self.torque_limits)
 
@@ -303,8 +299,3 @@ class UnitreeGo2(Dog):
         ret = self.sport_client.FreeAvoid(True)
         print("ret: ",ret)
         time.sleep(2)
-=======
-        # # torques = torques * self.motor_strength
-        # # return torch.clip(torques, -self.torque_limits, self.torque_limits)
-        # return torques
->>>>>>> 07009b3a21d07bcdf13ddb51e19c92e771dc3c58

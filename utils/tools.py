@@ -36,7 +36,7 @@ class Policy:
     teacher_act = True
     imi_flag = True
 
-
+import torch
 class Normalization:
     class obs_scales:
         lin_vel = 2.0
@@ -48,7 +48,19 @@ class Normalization:
     class act_scales:
         action_scale = 0.25
         hip_scale_reduction = 0.5 
-
+        # FR_hip_joint, FR_thigh_joint, FR_calf_joint
+        # FL_hip_joint, FL_thigh_joint, FL_calf_joint
+        # RR_hip_joint, RR_thigh_joint, RR_calf_joint
+        # RL_hip_joint, RL_thigh_joint, RL_calf_joint
+        dof_pos_clip = torch.tensor([[-0.837758, -3.49066, -2.72271,
+                                      -0.837758, -3.49066, -2.72271,
+                                      -0.837758, -4.53786, -2.72271,
+                                      -0.837758, -4.53786, -2.72271],
+                                     [0.837758, 1.5708, 0.837758,
+                                      0.837758, 1.5708, 0.837758,
+                                      0.837758, 0.523599, 0.837758,
+                                      0.837758, 0.523599, 0.837758]]) * 0.9
+    
     clip_observations = 100.0
     # clip_actions = 1.2
     clip_actions = 100

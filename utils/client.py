@@ -9,7 +9,9 @@ import unitree_sdk2py.idl.unitree_go.msg.dds_ as unitree_msg_dds
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__LowCmd_
 from unitree_sdk2py.utils.crc import CRC
 from unitree_sdk2py.go2.sport.sport_client import SportClient
-from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import (
+    MotionSwitcherClient,
+)
 from unitree_sdk2py.utils.thread import RecurrentThread
 
 
@@ -41,7 +43,7 @@ class Dog:
         self.policy = loaded_policy
         self.decimation = 4
         self.dt = 0.002
-        self.obs = torch.zeros((self.policy.num_hist+1, self.policy.num_prop))
+        self.obs = torch.zeros((self.policy.num_hist + 1, self.policy.num_prop))
         self.obs_cur = torch.zeros((1, self.policy.num_prop))
         self.act_buf = torch.zeros((self.policy.num_actions,))
         self.base_ang_vel = None
@@ -64,7 +66,7 @@ class Dog:
         """
         self.gravity_vec = torch.tensor([0.0, 0.0, -1], dtype=torch.float32)
         self.obs_scales = Normalization.obs_scales
-        self.act_scales =  Normalization.act_scales
+        self.act_scales = Normalization.act_scales
         self.clip_actions = Normalization.clip_actions
         self.clip_obs = Normalization.clip_observations
         self.Kp = Normalization.ctrl_params.Kp
@@ -78,7 +80,7 @@ class Dog:
         )  # TODO change this
 
         self.default_dof_pos = torch.tensor(
-            [ # action when no action, action = 0.0
+            [  # action when no action, action = 0.0
                 -0.1,  # FR_hip_joint
                 0.8,  # FR_thigh_joint
                 -1.5,  # FR_calf_joint
@@ -93,30 +95,31 @@ class Dog:
                 -1.5,  # RL_calf_joint
             ]
         )  # rad
-        # self.default_dof_pos = torch.tensor([-0.133, 1.22, -2.72, 
-        #                                      0.132, 1.23, -2.72, 
+        # self.default_dof_pos = torch.tensor([-0.133, 1.22, -2.72,
+        #                                      0.132, 1.23, -2.72,
         #                                      -0.494, 1.48, -2.72,
         #                                      0.492, 1.36, -2.72])
+
     #     self.default_dof_pos = torch.tensor([    0.0473455, 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375, 0.0473455,
     # 1.22187, -2.44375, -0.0473455, 1.22187, -2.44375])
     #     self.default_dof_pos = torch.tensor([0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763,
     # 0.00571868, 0.608813, -1.21763, -0.00571868, 0.608813, -1.21763])
-        # self.start_joint_angles = torch.tensor(
-        #     [
-        #         0.0,  # FR_hip_joint
-        #         0.9,  # FR_thigh_joint
-        #         -1.8,  # FR_calf_joint
-        #         0.0,  # FL_hip_joint
-        #         0.9,  # FL_thigh_joint
-        #         -1.8,  # FL_calf_joint
-        #         0.0,  # RR_hip_joint
-        #         0.9,  # RR_thigh_joint
-        #         -1.8,  # RR_calf_joint
-        #         0.0,  # RL_hip_joint
-        #         0.9,  # RL_thigh_joint
-        #         -1.8,  # RL_calf_joint
-        #     ]
-        # )
+    # self.start_joint_angles = torch.tensor(
+    #     [
+    #         0.0,  # FR_hip_joint
+    #         0.9,  # FR_thigh_joint
+    #         -1.8,  # FR_calf_joint
+    #         0.0,  # FL_hip_joint
+    #         0.9,  # FL_thigh_joint
+    #         -1.8,  # FL_calf_joint
+    #         0.0,  # RR_hip_joint
+    #         0.9,  # RR_thigh_joint
+    #         -1.8,  # RR_calf_joint
+    #         0.0,  # RL_hip_joint
+    #         0.9,  # RL_thigh_joint
+    #         -1.8,  # RL_calf_joint
+    #     ]
+    # )
 
     def _init_low_cmd(self):
         cmd = unitree_go_msg_dds__LowCmd_()
@@ -133,7 +136,7 @@ class Dog:
             cmd.motor_cmd[i].tau = 0.0
         self.cmd = cmd
         self.cmd_queue = queue.Queue(maxsize=10)
-        self.cmd_lock = threading.Lock()  
+        self.cmd_lock = threading.Lock()
         self.crc = CRC()
         self.lowCmdWriteThreadPtr = RecurrentThread(
             interval=self.dt, target=self._send_latest_cmd, name="writebasiccmd"
@@ -144,6 +147,8 @@ class Dog:
             cmd = self.cmd_queue.get_nowait()
             cmd.crc = self.crc.Crc(cmd)
             self.low_cmd_puber.Write(cmd)
+        except KeyboardInterrupt:
+            print("KeyboardInterrupt: Stopping command sending thread.")
         except queue.Empty:
             pass
 
@@ -196,19 +201,17 @@ class Dog:
                 torch.tensor(self.base_ang_vel) * self.obs_scales.ang_vel,
                 quat_apply_inverse(torch.tensor(self.base_quat), self.gravity_vec),
                 des_act[:3] * self.commands_scale,
-                (self.dof_pos - self.default_dof_pos)
-                * self.obs_scales.dof_pos,
+                (self.dof_pos - self.default_dof_pos) * self.obs_scales.dof_pos,
                 self.dof_vel * self.obs_scales.dof_vel,
                 self.act_buf,
             )
         )
-        self.obs = torch.cat([self.obs_cur,
-                            self.obs[:-1, :]])
+        self.obs = torch.cat([self.obs_cur, self.obs[:-1, :]])
         self.obs = torch.clip(
             self.obs,
             -self.clip_obs,
             self.clip_obs,
-        )   
+        )
 
     def step(self, des_act: torch.Tensor):
         """
@@ -240,7 +243,7 @@ class Dog:
             self.cmd.motor_cmd[i].tau = 0.0
 
     def _compute_torques(self, actions):
-        """ Compute torques from actions.
+        """Compute torques from actions.
             Actions can be interpreted as position or velocity targets given to a PD controller, or directly as scaled torques.
             [NOTE]: torques must have the same dimension as the number of DOFs, even if some DOFs are not actuated.
 
@@ -254,13 +257,15 @@ class Dog:
         if True:
             actions = self.act_buf * 0.2 + actions * 0.8
 
-        #pd controller
+        # pd controller
         actions_scaled = actions[:12] * self.act_scales.action_scale
         actions_scaled[[0, 3, 6, 9]] *= self.act_scales.hip_scale_reduction
-        
+
         joint_pos_target = actions_scaled + self.default_dof_pos
 
-        joint_pos_target = torch.clamp(joint_pos_target,self.dof_pos-1,self.dof_pos+1)
+        joint_pos_target = torch.clamp(
+            joint_pos_target, self.dof_pos - 1, self.dof_pos + 1
+        )
         return joint_pos_target
 
         # control_type = self.cfg.control.control_type
@@ -275,9 +280,10 @@ class Dog:
         #     torques = actions_scaled
         # else:
         #     raise NameError(f"Unknown controller type: {control_type}")
-        
+
         # torques = torques * self.motor_strength
         # return torch.clip(torques, -self.torque_limits, self.torque_limits)
+
 
 class UnitreeGo2(Dog):
     def __init__(self, loaded_policy: ActorCriticBarlowTwins):
@@ -290,13 +296,13 @@ class UnitreeGo2(Dog):
         self.msc.SetTimeout(5.0)
         self.msc.Init()
 
-        status, result = self.msc.CheckMode()
-        while result['name']:
-            self.sc.StandDown()
-            self.msc.ReleaseMode()
-            status, result = self.msc.CheckMode()
-            time.sleep(1)
-        
+        # status, result = self.msc.CheckMode()
+        # while result["name"]:
+        #     self.sc.StandDown()
+        #     self.msc.ReleaseMode()
+        #     status, result = self.msc.CheckMode()
+        #     time.sleep(1)
+
     def Damp(self):
         self.sport_client.Damp()
 
@@ -323,10 +329,10 @@ class UnitreeGo2(Dog):
 
     def FreeBound(self, is_start):
         ret = self.sport_client.FreeBound(is_start)
-        print("ret: ",ret)
+        print("ret: ", ret)
         time.sleep(2)
 
     def FreeAvoid(self, is_start):
         ret = self.sport_client.FreeAvoid(is_start)
-        print("ret: ",ret)
+        print("ret: ", ret)
         time.sleep(2)

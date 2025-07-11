@@ -63,5 +63,5 @@ if __name__ == "__main__":
     test_dog = UnitreeGo2(loaded_policy=policy)
     test_dog.start()
     while True:
-        test_dog.step(torch.tensor([1.0, 0.0, 0.0]))
+        test_dog.step(torch.tensor([0.5, 0.0, 0.0]))
         # time.sleep(0.02)
